@@ -1,0 +1,22 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.thumbv7em-none-eabihf]
+# probe-rs picks the chip; STM32F411CEUx is BlackPill UFQFPN48.
+runner = "probe-rs run --chip STM32F411CEUx"
+
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tdefmt.x",
+    # flip-link reorders RAM so a stack overflow faults instead of silently
+    # corrupting .bss/.data — uncomment after `flip-link` is on PATH (already installed).
+    "-C", "linker=flip-link",
+]
+
+[env]
+DEFMT_LOG = "trace"
+
+[unstable]
+# Keep build-std off by default; uncomment to compile core/alloc from source.
+# build-std = ["core"]
+# build-std-features = ["panic_immediate_abort"]
