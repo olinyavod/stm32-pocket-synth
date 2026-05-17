@@ -4,20 +4,26 @@
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::OutputType;
-use embassy_stm32::peripherals::{DMA2_CH5, PA6, PA8, PB6, TIM1, TIM3, TIM4};
+use embassy_stm32::peripherals::{PA6, PA8, PB6, TIM1, TIM3, TIM4};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::timer::Channel;
 use embassy_stm32::timer::low_level::CountingMode;
 use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use {defmt_rtt as _, panic_probe as _};
 
 include!(concat!(env!("OUT_DIR"), "/lut.rs"));
 
-// --- LED breathing on TIM1_CH1 (PA8) ---
+// --- Light-show sync: melody_task signals each note attack here, led_task
+//     consumes and lights up.
+//     Payload: (freq_hz, tone_ms). freq=0 → rest (LED off).
+static MELODY_NOTE: Signal<CriticalSectionRawMutex, (u32, u64)> = Signal::new();
+
+// --- LED light-show on TIM1_CH1 (PA8) ---
 
 #[embassy_executor::task]
-async fn led_task(tim: TIM1, pin: PA8, mut dma: DMA2_CH5) -> ! {
+async fn led_task(tim: TIM1, pin: PA8) -> ! {
     let p = PwmPin::new_ch1(pin, OutputType::PushPull);
     let mut pwm = SimplePwm::new(
         tim,
@@ -29,9 +35,35 @@ async fn led_task(tim: TIM1, pin: PA8, mut dma: DMA2_CH5) -> ! {
         CountingMode::EdgeAlignedUp,
     );
     pwm.ch1().enable();
-    defmt::assert_eq!(pwm.max_duty_cycle(), LED_PWM_TOP);
+    pwm.ch1().set_duty_cycle(0);
+    let max = pwm.max_duty_cycle() as u32;
+
+    // Map note frequency to peak brightness. Melody range is roughly
+    // 440 Hz (A4) — 880 Hz (A5). Linearly interpolate so high notes are
+    // bright, low notes dimmer. Clamped to [12.5%, 100%] of max duty so
+    // even the lowest note is visible.
+    const LOW_HZ: u32 = 200;
+    const HIGH_HZ: u32 = 900;
+    const FADE_STEPS: u64 = 24;
+
     loop {
-        pwm.waveform_up(&mut dma, Channel::Ch1, &LED_LUT).await;
+        let (freq, tone_ms) = MELODY_NOTE.wait().await;
+        if freq == 0 {
+            // Rest — LED off until next note.
+            pwm.ch1().set_duty_cycle(0);
+            continue;
+        }
+        let f = freq.clamp(LOW_HZ, HIGH_HZ);
+        let peak = max / 8 + (max * 7 / 8) * (f - LOW_HZ) / (HIGH_HZ - LOW_HZ);
+
+        // Quick attack + linear fade over the note's duration.
+        let step_ms = (tone_ms / FADE_STEPS).max(1);
+        for i in 0..FADE_STEPS {
+            let duty = (peak * (FADE_STEPS - i) as u32 / FADE_STEPS as u32) as u16;
+            pwm.ch1().set_duty_cycle(duty);
+            Timer::after(Duration::from_millis(step_ms)).await;
+        }
+        pwm.ch1().set_duty_cycle(0);
     }
 }
 
@@ -124,6 +156,8 @@ async fn melody_task(tim: TIM3, pin: PA6) -> ! {
     loop {
         for &(freq, dur_ms) in MELODY {
             let tone_ms = (dur_ms as u64).saturating_sub(NOTE_GAP_MS);
+            // Tell led_task about this note so it can flash + fade in sync.
+            MELODY_NOTE.signal((freq, tone_ms));
             if freq == 0 {
                 pwm.ch1().set_duty_cycle(0);
                 Timer::after(Duration::from_millis(tone_ms)).await;
@@ -184,7 +218,7 @@ async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
     info!("3-channel pocket synth: LED (PA8) | Melody (PA6) | Bass (PB6)");
 
-    spawner.spawn(led_task(p.TIM1, p.PA8, p.DMA2_CH5)).unwrap();
+    spawner.spawn(led_task(p.TIM1, p.PA8)).unwrap();
     spawner.spawn(melody_task(p.TIM3, p.PA6)).unwrap();
     spawner.spawn(bass_task(p.TIM4, p.PB6)).unwrap();
 }
