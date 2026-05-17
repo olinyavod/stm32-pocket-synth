@@ -16,6 +16,12 @@ rustflags = [
 [env]
 DEFMT_LOG = "trace"
 
+# Host-side tests for the pure-logic lib (util, songs). Run with `cargo t`.
+# The default `cargo test` would inherit `target = thumbv7em-none-eabihf` from
+# the [build] section above — which doesn't link std and so can't run tests.
+[alias]
+t = "test --target x86_64-pc-windows-msvc --lib"
+
 [unstable]
 # Keep build-std off by default; uncomment to compile core/alloc from source.
 # build-std = ["core"]
