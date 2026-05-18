@@ -12,10 +12,8 @@ use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
 use embassy_time::{Duration, Timer};
 
 use black_sitizator::util::peak_brightness;
+use crate::generated::LED_PWM_FREQ_HZ;
 use crate::voice::MELODY_NOTE;
-
-// Pulled in via build.rs (constants generated from the LED PWM frequency).
-include!(concat!(env!("OUT_DIR"), "/lut.rs"));
 
 /// Pitch range used to map note frequency → peak brightness.
 /// Notes below LOW_HZ get min brightness; above HIGH_HZ get max.

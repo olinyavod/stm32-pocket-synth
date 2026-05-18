@@ -1,10 +1,10 @@
-//! Audio synthesis voices — each one drives a TIMx_CH1 pin as a hardware
-//! square wave at the note frequency. Two tasks live here:
+//! Two-voice polyphonic chiptune driven by MIDI events from `usb_task`.
 //!
-//! - [`melody_task`]: TIM3_CH1 on PA6, with triangle-LFO vibrato. Signals
-//!   [`MELODY_NOTE`] before every note so the light-show stays in sync.
-//! - [`bass_task`]: TIM4_CH1 on PB6, plain 50 % duty square waves — no
-//!   vibrato, no LED signalling.
+//! Each voice owns a hardware timer (TIM3 → PA6, TIM4 → PB6) running as a
+//! square-wave oscillator. The MIDI parser picks which voice should sound each
+//! Note-On using a tiny round-robin allocator, then drops the Note-Off back
+//! to whichever voice was holding that note. Both voices output to the same
+//! piezo through the resistor summer, so we get a real 2-channel chiptune mix.
 
 use embassy_stm32::gpio::OutputType;
 use embassy_stm32::peripherals::{PA6, PB6, TIM3, TIM4};
@@ -12,32 +12,34 @@ use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::low_level::CountingMode;
 use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
 
-// Pure data + helpers live in the lib half (testable on host).
-use black_sitizator::songs::{TETRIS_BASS, TETRIS_MELODY};
-use black_sitizator::util::vibrato_freq;
-
-/// Brief silence after every note so two same-pitch notes are heard as
-/// separate strikes — same articulation trick a Game Boy used.
-pub const NOTE_GAP_MS: u64 = 15;
-
-/// Light-show synchronization: melody_task publishes (freq_hz, tone_ms) before
-/// each note, led_task waits on this.
+/// Light-show feed — signalled on every Note-On (any voice).
 pub static MELODY_NOTE: Signal<CriticalSectionRawMutex, (u32, u64)> = Signal::new();
 
-// --- Vibrato LFO ---
+/// LED fade hint used by `light_show::led_task` — MIDI notes have no a priori
+/// duration so we just pick a perceptually pleasant value.
+pub const LED_FADE_HINT_MS: u64 = 200;
 
-/// Triangle wave in cents. ±10 cents = subtle "expressive" wobble.
-/// 16 entries × `VIBRATO_STEP_MS` (10 ms) = 160 ms full cycle ≈ 6.25 Hz.
-const VIBRATO_CENTS: [i32; 16] = [
-    0, 3, 6, 9, 10, 9, 6, 3, 0, -3, -6, -9, -10, -9, -6, -3,
-];
-const VIBRATO_STEP_MS: u64 = 10;
+#[derive(Clone, Copy)]
+pub enum VoiceCmd {
+    NoteOn { note: u8, freq_hz: u32 },
+    NoteOff { note: u8 },
+    AllOff,
+}
+
+// One bounded queue per voice. 16 slots covers the burstiest realistic key-press
+// rate (VMPK / fast trills); excess events are dropped via `try_send`.
+pub static VOICE_0: Channel<CriticalSectionRawMutex, VoiceCmd, 16> = Channel::new();
+pub static VOICE_1: Channel<CriticalSectionRawMutex, VoiceCmd, 16> = Channel::new();
+
+// Voice tasks are near-duplicates because each is generic over a different
+// concrete TIM/pin pair — embassy's task macro doesn't accept generics, so we
+// duplicate the small inner loop rather than fight the borrow checker.
 
 #[embassy_executor::task]
-pub async fn melody_task(tim: TIM3, pin: PA6) -> ! {
+pub async fn voice0_task(tim: TIM3, pin: PA6) -> ! {
     let p = PwmPin::new_ch1(pin, OutputType::PushPull);
     let mut pwm = SimplePwm::new(
         tim,
@@ -50,38 +52,33 @@ pub async fn melody_task(tim: TIM3, pin: PA6) -> ! {
     );
     pwm.ch1().enable();
     pwm.ch1().set_duty_cycle(0);
-    let mut lfo_idx: usize = 0;
 
+    let mut current: Option<u8> = None;
     loop {
-        for &(freq, dur_ms) in TETRIS_MELODY {
-            let tone_ms = (dur_ms as u64).saturating_sub(NOTE_GAP_MS);
-            // Tell the light-show about this note.
-            MELODY_NOTE.signal((freq, tone_ms));
-            if freq == 0 {
-                pwm.ch1().set_duty_cycle(0);
-                Timer::after(Duration::from_millis(tone_ms)).await;
-            } else {
-                // Step through the LFO entries until tone_ms is consumed.
-                let mut elapsed: u64 = 0;
-                while elapsed < tone_ms {
-                    let cents = VIBRATO_CENTS[lfo_idx % VIBRATO_CENTS.len()];
-                    pwm.set_frequency(Hertz(vibrato_freq(freq, cents)));
-                    let mid = pwm.max_duty_cycle() / 2;
-                    pwm.ch1().set_duty_cycle(mid);
-                    let dt = VIBRATO_STEP_MS.min(tone_ms - elapsed);
-                    Timer::after(Duration::from_millis(dt)).await;
-                    elapsed += dt;
-                    lfo_idx = lfo_idx.wrapping_add(1);
+        match VOICE_0.receive().await {
+            VoiceCmd::NoteOn { note, freq_hz } => {
+                pwm.set_frequency(Hertz(freq_hz));
+                let mid = pwm.max_duty_cycle() / 2;
+                pwm.ch1().set_duty_cycle(mid);
+                current = Some(note);
+                MELODY_NOTE.signal((freq_hz, LED_FADE_HINT_MS));
+            }
+            VoiceCmd::NoteOff { note } => {
+                if current == Some(note) {
+                    pwm.ch1().set_duty_cycle(0);
+                    current = None;
                 }
             }
-            pwm.ch1().set_duty_cycle(0);
-            Timer::after(Duration::from_millis(NOTE_GAP_MS)).await;
+            VoiceCmd::AllOff => {
+                pwm.ch1().set_duty_cycle(0);
+                current = None;
+            }
         }
     }
 }
 
 #[embassy_executor::task]
-pub async fn bass_task(tim: TIM4, pin: PB6) -> ! {
+pub async fn voice1_task(tim: TIM4, pin: PB6) -> ! {
     let p = PwmPin::new_ch1(pin, OutputType::PushPull);
     let mut pwm = SimplePwm::new(
         tim,
@@ -95,19 +92,87 @@ pub async fn bass_task(tim: TIM4, pin: PB6) -> ! {
     pwm.ch1().enable();
     pwm.ch1().set_duty_cycle(0);
 
+    let mut current: Option<u8> = None;
     loop {
-        for &(freq, dur_ms) in TETRIS_BASS {
-            let tone_ms = (dur_ms as u64).saturating_sub(NOTE_GAP_MS);
-            if freq == 0 {
-                pwm.ch1().set_duty_cycle(0);
-            } else {
-                pwm.set_frequency(Hertz(freq));
+        match VOICE_1.receive().await {
+            VoiceCmd::NoteOn { note, freq_hz } => {
+                pwm.set_frequency(Hertz(freq_hz));
                 let mid = pwm.max_duty_cycle() / 2;
                 pwm.ch1().set_duty_cycle(mid);
+                current = Some(note);
+                MELODY_NOTE.signal((freq_hz, LED_FADE_HINT_MS));
             }
-            Timer::after(Duration::from_millis(tone_ms)).await;
-            pwm.ch1().set_duty_cycle(0);
-            Timer::after(Duration::from_millis(NOTE_GAP_MS)).await;
+            VoiceCmd::NoteOff { note } => {
+                if current == Some(note) {
+                    pwm.ch1().set_duty_cycle(0);
+                    current = None;
+                }
+            }
+            VoiceCmd::AllOff => {
+                pwm.ch1().set_duty_cycle(0);
+                current = None;
+            }
         }
+    }
+}
+
+// --- Voice allocator (consumed by usb_task) ---
+
+/// Tracks which MIDI note (if any) each voice is currently sounding, and
+/// chooses targets for new Note-Ons via round-robin steal.
+pub struct Allocator {
+    notes: [Option<u8>; 2],
+    next_steal: usize,
+}
+
+impl Allocator {
+    pub const fn new() -> Self {
+        Self {
+            notes: [None; 2],
+            next_steal: 0,
+        }
+    }
+
+    /// Pick a voice to sound `note`. Prefer an idle slot; otherwise steal one
+    /// in round-robin order. Returns the voice index (0 or 1).
+    pub fn note_on(&mut self, note: u8) -> usize {
+        for i in 0..self.notes.len() {
+            if self.notes[i].is_none() {
+                self.notes[i] = Some(note);
+                return i;
+            }
+        }
+        let idx = self.next_steal;
+        self.next_steal = (idx + 1) % self.notes.len();
+        self.notes[idx] = Some(note);
+        idx
+    }
+
+    /// Return the voice (if any) that was holding this note; clears it.
+    pub fn note_off(&mut self, note: u8) -> Option<usize> {
+        for i in 0..self.notes.len() {
+            if self.notes[i] == Some(note) {
+                self.notes[i] = None;
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    pub fn all_off(&mut self) {
+        self.notes = [None; 2];
+    }
+}
+
+/// Send a `VoiceCmd` to voice `idx`. Drops the command if the queue is full.
+pub fn dispatch(idx: usize, cmd: VoiceCmd) {
+    match idx {
+        0 => {
+            let _ = VOICE_0.try_send(cmd);
+        }
+        1 => {
+            let _ = VOICE_1.try_send(cmd);
+        }
+        _ => {}
     }
 }

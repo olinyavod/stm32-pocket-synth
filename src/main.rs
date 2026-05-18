@@ -12,10 +12,17 @@ use embassy_stm32::time::Hertz;
 use {defmt_rtt as _, panic_probe as _};
 
 // `songs` and `util` come from the lib half of this same package
-// (see Cargo.toml [lib]); only `voice`, `light_show` and `usb` are bin-only modules.
+// (see Cargo.toml [lib]); only `voice`, `light_show`, `usb` and `button` are bin-only modules.
+mod button;
 mod light_show;
 mod usb;
 mod voice;
+
+/// Compile-time-generated constants and tables (see build.rs).
+/// Single source of truth — included once, used from light_show and usb.
+pub mod generated {
+    include!(concat!(env!("OUT_DIR"), "/lut.rs"));
+}
 
 /// Clock tree for HSE+PLL: 25 MHz crystal → 96 MHz SYSCLK and 48 MHz USB.
 ///
@@ -54,8 +61,9 @@ async fn main(spawner: Spawner) {
     info!("Pocket synth: SYSCLK 96 MHz, USB clk 48 MHz | LED PA8 | Melody PA6 | Bass PB6");
 
     spawner.spawn(light_show::led_task(p.TIM1, p.PA8)).unwrap();
-    spawner.spawn(voice::melody_task(p.TIM3, p.PA6)).unwrap();
-    spawner.spawn(voice::bass_task(p.TIM4, p.PB6)).unwrap();
+    spawner.spawn(voice::voice0_task(p.TIM3, p.PA6)).unwrap();
+    spawner.spawn(voice::voice1_task(p.TIM4, p.PB6)).unwrap();
+    spawner.spawn(button::button_task(p.PA0, p.PC13)).unwrap();
     spawner
         .spawn(usb::usb_task(p.USB_OTG_FS, p.PA12, p.PA11))
         .unwrap();

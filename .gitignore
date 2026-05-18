@@ -2,3 +2,7 @@
 **/*.rs.bk
 .vscode/
 *.bin
+
+# Python cache from MIDI tooling
+**/__pycache__/
+*.pyc
