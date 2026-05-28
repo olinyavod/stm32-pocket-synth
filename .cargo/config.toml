@@ -21,6 +21,8 @@ DEFMT_LOG = "trace"
 # the [build] section above — which doesn't link std and so can't run tests.
 [alias]
 t = "test --target x86_64-pc-windows-msvc --lib"
+build-f411 = "build --release --features mcu-stm32f411ce"
+build-h743 = "build --release --no-default-features --features mcu-stm32h7 --target thumbv7em-none-eabihf"
 
 [unstable]
 # Keep build-std off by default; uncomment to compile core/alloc from source.

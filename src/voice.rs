@@ -7,7 +7,7 @@
 //! piezo through the resistor summer, so we get a real 2-channel chiptune mix.
 
 use embassy_stm32::gpio::OutputType;
-use embassy_stm32::peripherals::{PA6, PB6, TIM3, TIM4};
+use embassy_stm32::peripherals::{PA6, PB7, TIM3, TIM4};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::low_level::CountingMode;
 use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
@@ -21,6 +21,12 @@ pub static MELODY_NOTE: Signal<CriticalSectionRawMutex, (u32, u64)> = Signal::ne
 /// LED fade hint used by `light_show::led_task` — MIDI notes have no a priori
 /// duration so we just pick a perceptually pleasant value.
 pub const LED_FADE_HINT_MS: u64 = 200;
+
+/// PWM duty cycle for an active note. 50 % is the standard symmetric square
+/// wave — maximum fundamental power, classic chiptune sound. Two voices summed
+/// through the resistor mixer can briefly hit the supply rail; if that turns
+/// out to crackle in the amplifier, lower this value (e.g. 30 %).
+pub const NOTE_DUTY_PCT: u32 = 50;
 
 #[derive(Clone, Copy)]
 pub enum VoiceCmd {
@@ -58,8 +64,13 @@ pub async fn voice0_task(tim: TIM3, pin: PA6) -> ! {
         match VOICE_0.receive().await {
             VoiceCmd::NoteOn { note, freq_hz } => {
                 pwm.set_frequency(Hertz(freq_hz));
-                let mid = pwm.max_duty_cycle() / 2;
-                pwm.ch1().set_duty_cycle(mid);
+                // 30 % duty (not 50 %) so when both voices happen to be HIGH at
+                // the same instant the summed voltage on node A stays in the
+                // amplifier's linear range. Avoids clipping during 2-key
+                // polyphony at the cost of mono-volume; the user compensates
+                // with the volume pot.
+                let duty = (pwm.max_duty_cycle() as u32 * NOTE_DUTY_PCT / 100) as u16;
+                pwm.ch1().set_duty_cycle(duty);
                 current = Some(note);
                 MELODY_NOTE.signal((freq_hz, LED_FADE_HINT_MS));
             }
@@ -78,38 +89,40 @@ pub async fn voice0_task(tim: TIM3, pin: PA6) -> ! {
 }
 
 #[embassy_executor::task]
-pub async fn voice1_task(tim: TIM4, pin: PB6) -> ! {
-    let p = PwmPin::new_ch1(pin, OutputType::PushPull);
+pub async fn voice1_task(tim: TIM4, pin: PB7) -> ! {
+    // PB7 = TIM4_CH2. Switched from PB6/CH1 because PB6 appeared dead in
+    // bench-testing (possibly burnt or never properly soldered).
+    let p = PwmPin::new_ch2(pin, OutputType::PushPull);
     let mut pwm = SimplePwm::new(
         tim,
-        Some(p),
         None,
+        Some(p),
         None,
         None,
         Hertz(1_000),
         CountingMode::EdgeAlignedUp,
     );
-    pwm.ch1().enable();
-    pwm.ch1().set_duty_cycle(0);
+    pwm.ch2().enable();
+    pwm.ch2().set_duty_cycle(0);
 
     let mut current: Option<u8> = None;
     loop {
         match VOICE_1.receive().await {
             VoiceCmd::NoteOn { note, freq_hz } => {
                 pwm.set_frequency(Hertz(freq_hz));
-                let mid = pwm.max_duty_cycle() / 2;
-                pwm.ch1().set_duty_cycle(mid);
+                let duty = (pwm.max_duty_cycle() as u32 * NOTE_DUTY_PCT / 100) as u16;
+                pwm.ch2().set_duty_cycle(duty);
                 current = Some(note);
                 MELODY_NOTE.signal((freq_hz, LED_FADE_HINT_MS));
             }
             VoiceCmd::NoteOff { note } => {
                 if current == Some(note) {
-                    pwm.ch1().set_duty_cycle(0);
+                    pwm.ch2().set_duty_cycle(0);
                     current = None;
                 }
             }
             VoiceCmd::AllOff => {
-                pwm.ch1().set_duty_cycle(0);
+                pwm.ch2().set_duty_cycle(0);
                 current = None;
             }
         }

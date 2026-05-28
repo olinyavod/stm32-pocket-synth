@@ -1,13 +1,23 @@
 #![no_std]
 #![no_main]
 
+#[cfg(all(feature = "mcu-stm32f411ce", feature = "mcu-stm32h7"))]
+compile_error!("Select exactly one MCU feature: mcu-stm32f411ce or mcu-stm32h7.");
+
+#[cfg(not(any(feature = "mcu-stm32f411ce", feature = "mcu-stm32h7")))]
+compile_error!("Select one MCU feature: mcu-stm32f411ce or mcu-stm32h7.");
+
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::Config;
+
+#[cfg(feature = "mcu-stm32f411ce")]
 use embassy_stm32::rcc::{
     AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllMul, PllPDiv, PllPreDiv, PllQDiv, PllSource,
     Sysclk,
 };
+
+#[cfg(feature = "mcu-stm32f411ce")]
 use embassy_stm32::time::Hertz;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -33,6 +43,7 @@ pub mod generated {
 ///   AHB /1  → HCLK = 96 MHz
 ///   APB1 /2 → PCLK1 = 48 MHz  (TIM2..7 run at 96 MHz: PCLK1 × 2)
 ///   APB2 /1 → PCLK2 = 96 MHz  (TIM1, 9, 10, 11 run at 96 MHz)
+#[cfg(feature = "mcu-stm32f411ce")]
 fn clock_config() -> Config {
     let mut config = Config::default();
     config.rcc.hsi = false;
@@ -55,15 +66,38 @@ fn clock_config() -> Config {
     config
 }
 
+/// Portable STM32H7 bring-up clock.
+///
+/// This leaves Embassy's H7 defaults in place: internal HSI for SYSCLK and
+/// HSI48 enabled for USB. Once the exact H7 board and crystal are known, tune
+/// this profile for the desired SYSCLK and audio/USB clock tree.
+#[cfg(feature = "mcu-stm32h7")]
+fn clock_config() -> Config {
+    Config::default()
+}
+
+#[cfg(feature = "mcu-stm32f411ce")]
+const BOOT_LOG: &str =
+    "Pocket synth STM32F411CE: SYSCLK 96 MHz, USB clk 48 MHz | LED PA8 | Melody PA6 | Bass PB7";
+
+#[cfg(feature = "mcu-stm32h7")]
+const BOOT_LOG: &str =
+    "Pocket synth STM32H743ZI: default HSI clocks, HSI48 USB | LED PA8 | Melody PA6 | Bass PB7";
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(clock_config());
-    info!("Pocket synth: SYSCLK 96 MHz, USB clk 48 MHz | LED PA8 | Melody PA6 | Bass PB6");
+    info!("{}", BOOT_LOG);
 
     spawner.spawn(light_show::led_task(p.TIM1, p.PA8)).unwrap();
     spawner.spawn(voice::voice0_task(p.TIM3, p.PA6)).unwrap();
-    spawner.spawn(voice::voice1_task(p.TIM4, p.PB6)).unwrap();
+    spawner.spawn(voice::voice1_task(p.TIM4, p.PB7)).unwrap();
+
+    #[cfg(feature = "mcu-stm32f411ce")]
     spawner.spawn(button::button_task(p.PA0, p.PC13)).unwrap();
+    #[cfg(feature = "mcu-stm32h7")]
+    spawner.spawn(button::button_task(p.PC13, p.PB0)).unwrap();
+
     spawner
         .spawn(usb::usb_task(p.USB_OTG_FS, p.PA12, p.PA11))
         .unwrap();

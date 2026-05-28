@@ -1,6 +1,6 @@
 # stm32-pocket-synth
 
-Carmel-sized synthesizer experiments on a WeAct **STM32F411CEU6 BlackPill**, written in Rust on top of the [Embassy](https://embassy.dev/) async framework.
+Carmel-sized synthesizer experiments on a WeAct **STM32F411CEU6 BlackPill**, written in Rust on top of the [Embassy](https://embassy.dev/) async framework. The STM32F411 profile remains the default; an STM32H7 profile is available for **NUCLEO-H743ZI2** with **STM32H743ZIT6**.
 
 ## Current state
 
@@ -30,11 +30,38 @@ Same primitives, swapped LUT/rate, scale up to audio: feed an I2S DAC at 48 kHz 
 ## Build
 
 ```powershell
-# After installing Rust + the embedded target + cargo-binutils + dfu-util.
+# Default profile: STM32F411CEU6 BlackPill.
 cargo build --release
+
+# Same default target, explicit alias.
+cargo build-f411
+
+# NUCLEO-H743ZI2 / STM32H743ZI profile.
+cargo build-h743
+
+# Equivalent full command.
+cargo build --release --no-default-features --features mcu-stm32h7
 ```
 
-## Flash via USB DFU
+The H7 profile targets NUCLEO-H743ZI2. It currently uses Embassy's default
+HSI/HSI48 clock setup for bring-up. After the board-level wiring is settled,
+tune `clock_config()` in `src/main.rs` for the desired SYSCLK and audio/USB
+clock tree.
+
+Probe-rs uses the chip name `STM32H743ZI` for the STM32H743ZIT6 on this board.
+
+## Flash/run via ST-LINK (NUCLEO-H743ZI2)
+
+Connect the Nucleo STLINK-V3E USB connector to the PC, then run:
+
+```powershell
+./run-nucleo-h743zi2.ps1
+```
+
+The script builds the `mcu-stm32h7` profile, flashes the ELF with
+`probe-rs run --chip STM32H743ZI`, and keeps RTT/defmt output attached.
+
+## Flash via USB DFU (STM32F411)
 
 The STM32F411 has a built-in USB DFU bootloader. No ST-Link required.
 
@@ -51,11 +78,25 @@ The script builds release, calls `cargo objcopy` to get a raw `.bin`, then invok
 
 ## Hardware
 
+### STM32F411 BlackPill
+
 | BlackPill pin | Connected to |
 |---|---|
 | PA8 (TIM1_CH1) | LED anode → 330 Ω resistor → GND |
 | GND | LED cathode (via the resistor) |
 | USB-C / micro-USB | PC, for power and DFU flashing |
+
+### NUCLEO-H743ZI2
+
+| Nucleo signal | MCU pin | Used for |
+|---|---|---|
+| B1 USER | PC13 | Test-note button, active HIGH |
+| LD1 green | PB0 | Button-read indicator, active HIGH |
+| PA8 (TIM1_CH1) | PA8 | External light-show LED |
+| PA6 (TIM3_CH1) | PA6 | Voice 0 PWM output |
+| PB7 (TIM4_CH2) | PB7 | Voice 1 PWM output |
+| USB OTG FS | PA12 / PA11 | USB-MIDI D+ / D- |
+| STLINK-V3E USB | SWD | Flashing and RTT logs |
 
 ## Why Rust + Embassy?
 

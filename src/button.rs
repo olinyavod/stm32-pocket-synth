@@ -6,7 +6,10 @@
 //! settle by the next poll.
 
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
+#[cfg(feature = "mcu-stm32f411ce")]
 use embassy_stm32::peripherals::{PA0, PC13};
+#[cfg(feature = "mcu-stm32h7")]
+use embassy_stm32::peripherals::{PB0, PC13};
 use embassy_time::{Duration, Timer};
 
 use crate::generated::MIDI_NOTE_HZ;
@@ -15,6 +18,7 @@ use crate::voice::{dispatch, VoiceCmd};
 /// MIDI 69 = A4 = 440 Hz (concert pitch).
 const TEST_NOTE: u8 = 69;
 
+#[cfg(feature = "mcu-stm32f411ce")]
 #[embassy_executor::task]
 pub async fn button_task(pin: PA0, led_pin: PC13) -> ! {
     // PA0 has the WeAct KEY button to GND — pull-up keeps it HIGH idle.
@@ -42,6 +46,39 @@ pub async fn button_task(pin: PA0, led_pin: PC13) -> ! {
             } else {
                 dispatch(0, VoiceCmd::NoteOff { note: TEST_NOTE });
                 led.set_high(); // LED OFF
+            }
+            prev_pressed = pressed;
+        }
+        Timer::after(Duration::from_millis(15)).await;
+    }
+}
+
+#[cfg(feature = "mcu-stm32h7")]
+#[embassy_executor::task]
+pub async fn button_task(pin: PC13, led_pin: PB0) -> ! {
+    // NUCLEO-H743ZI2 B1 USER is on PC13 and is active HIGH.
+    let button = Input::new(pin, Pull::Down);
+
+    // NUCLEO-H743ZI2 LD1 green user LED is on PB0 and is active HIGH.
+    let mut led = Output::new(led_pin, Level::Low, Speed::Low);
+
+    let mut prev_pressed = false;
+    loop {
+        let pressed = button.is_high();
+        if pressed != prev_pressed {
+            if pressed {
+                let freq = MIDI_NOTE_HZ[TEST_NOTE as usize];
+                dispatch(
+                    0,
+                    VoiceCmd::NoteOn {
+                        note: TEST_NOTE,
+                        freq_hz: freq,
+                    },
+                );
+                led.set_high(); // LED ON
+            } else {
+                dispatch(0, VoiceCmd::NoteOff { note: TEST_NOTE });
+                led.set_low(); // LED OFF
             }
             prev_pressed = pressed;
         }

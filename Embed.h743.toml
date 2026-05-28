@@ -1,0 +1,12 @@
+[default.general]
+# NUCLEO-H743ZI2 target MCU is STM32H743ZIT6; probe-rs uses STM32H743ZI.
+chip = "STM32H743ZI"
+
+[default.rtt]
+enabled = true
+
+[default.gdb]
+enabled = false
+
+[default.reset]
+halt_afterwards = false

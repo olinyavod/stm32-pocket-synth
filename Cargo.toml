@@ -3,6 +3,12 @@ name = "black_sitizator"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["mcu-stm32f411ce"]
+mcu-stm32f411ce = ["embassy-stm32/stm32f411ce"]
+# NUCLEO-H743ZI2 uses STM32H743ZIT6; Embassy/probe-rs name it STM32H743ZI.
+mcu-stm32h7 = ["embassy-stm32/stm32h743zi"]
+
 # The pure-logic lib half has no runtime dependencies of its own — it's just
 # u32 math and static data. All the embedded crates below are pulled in only
 # when building for a bare-metal target.
@@ -10,7 +16,6 @@ edition = "2024"
 [target.'cfg(target_os = "none")'.dependencies]
 embassy-stm32 = { version = "0.2.0", features = [
     "defmt",
-    "stm32f411ce",
     "memory-x",
     "unstable-pac",
     "time-driver-any",
