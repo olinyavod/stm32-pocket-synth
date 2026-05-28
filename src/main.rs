@@ -66,14 +66,32 @@ fn clock_config() -> Config {
     config
 }
 
-/// Portable STM32H7 bring-up clock.
+/// Portable STM32H7 bring-up clock for NUCLEO-H743ZI2.
 ///
-/// This leaves Embassy's H7 defaults in place: internal HSI for SYSCLK and
-/// HSI48 enabled for USB. Once the exact H7 board and crystal are known, tune
-/// this profile for the desired SYSCLK and audio/USB clock tree.
+/// The board's default HSE source is the 8 MHz MCO from STLINK-V3E. Keep SYSCLK
+/// on Embassy's conservative default HSI, but derive USB's exact 48 MHz clock
+/// from PLL3_Q.
 #[cfg(feature = "mcu-stm32h7")]
 fn clock_config() -> Config {
-    Config::default()
+    use embassy_stm32::rcc::{Hse, HseMode, Pll, PllDiv, PllMul, PllPreDiv, PllSource};
+    use embassy_stm32::time::Hertz;
+
+    let mut config = Config::default();
+    config.rcc.hse = Some(Hse {
+        freq: Hertz(8_000_000),
+        mode: HseMode::Bypass,
+    });
+    config.rcc.hsi48 = None;
+    config.rcc.pll3 = Some(Pll {
+        source: PllSource::HSE,
+        prediv: PllPreDiv::DIV2,
+        mul: PllMul::MUL120,
+        divp: None,
+        divq: Some(PllDiv::DIV10),
+        divr: None,
+    });
+    config.rcc.mux.usbsel = embassy_stm32::rcc::mux::Usbsel::PLL3_Q;
+    config
 }
 
 #[cfg(feature = "mcu-stm32f411ce")]
@@ -82,7 +100,7 @@ const BOOT_LOG: &str =
 
 #[cfg(feature = "mcu-stm32h7")]
 const BOOT_LOG: &str =
-    "Pocket synth STM32H743ZI: default HSI clocks, HSI48 USB | LED PA8 | Melody PA6 | Bass PB7";
+    "Pocket synth STM32H743ZI: HSI SYSCLK, USB clock PLL3_Q 48 MHz from STLINK MCO | LED PA8 | Melody PA6 | Bass PB7";
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {

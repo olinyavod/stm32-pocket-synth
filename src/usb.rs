@@ -21,8 +21,19 @@ bind_interrupts!(pub struct Irqs {
 pub async fn usb_task(periph: USB_OTG_FS, dp: PA12, dm: PA11) -> ! {
     static mut EP_OUT_BUFFER: [u8; 256] = [0; 256];
 
-    let mut usb_cfg = embassy_stm32::usb::Config::default();
-    usb_cfg.vbus_detection = false;
+    let usb_cfg = {
+        let config = embassy_stm32::usb::Config::default();
+        #[cfg(feature = "mcu-stm32h7")]
+        {
+            let mut config = config;
+            config.vbus_detection = true;
+            config
+        }
+        #[cfg(not(feature = "mcu-stm32h7"))]
+        {
+            config
+        }
+    };
 
     let driver = Driver::new_fs(
         periph,

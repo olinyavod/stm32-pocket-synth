@@ -56,6 +56,11 @@ path = "src/lib.rs"
 name = "black_sitizator"
 path = "src/main.rs"
 
+[[bin]]
+name = "usb_probe"
+path = "src/bin/usb_probe.rs"
+required-features = ["mcu-stm32h7"]
+
 [profile.release]
 codegen-units = 1
 debug = 2          # keep debuginfo for defmt

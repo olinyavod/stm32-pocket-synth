@@ -61,6 +61,19 @@ Connect the Nucleo STLINK-V3E USB connector to the PC, then run:
 The script builds the `mcu-stm32h7` profile, flashes the ELF with
 `probe-rs run --chip STM32H743ZI`, and keeps RTT/defmt output attached.
 
+### USB CDC probe firmware
+
+To isolate board USB wiring/power from the synthesizer MIDI stack, flash the
+minimal CDC ACM probe:
+
+```powershell
+./run-usb-probe-h743.ps1
+```
+
+If CN13 USB is healthy, Windows should enumerate `USB Probe CDC` as a USB serial
+device. Bytes sent to the COM port are echoed back, and RTT logs print
+`USB CDC connected`.
+
 ## Flash via USB DFU (STM32F411)
 
 The STM32F411 has a built-in USB DFU bootloader. No ST-Link required.
