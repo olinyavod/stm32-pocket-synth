@@ -4,21 +4,21 @@
 
 use defmt::*;
 use embassy_stm32::bind_interrupts;
-use embassy_stm32::peripherals::{PA11, PA12, USB_OTG_FS};
 use embassy_stm32::usb::{Driver, InterruptHandler};
 use embassy_usb::class::midi::MidiClass;
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config as UsbConfig};
 
 use crate::generated::MIDI_NOTE_HZ;
-use crate::voice::{dispatch, Allocator, VoiceCmd};
+use crate::pinmap::{UsbDmPin, UsbDpPin, UsbPeripheral};
+use crate::voice::{Allocator, VoiceCmd, dispatch};
 
 bind_interrupts!(pub struct Irqs {
-    OTG_FS => InterruptHandler<USB_OTG_FS>;
+    OTG_FS => InterruptHandler<UsbPeripheral>;
 });
 
 #[embassy_executor::task]
-pub async fn usb_task(periph: USB_OTG_FS, dp: PA12, dm: PA11) -> ! {
+pub async fn usb_task(periph: UsbPeripheral, dp: UsbDpPin, dm: UsbDmPin) -> ! {
     static mut EP_OUT_BUFFER: [u8; 256] = [0; 256];
 
     let usb_cfg = {
@@ -114,7 +114,13 @@ fn handle_event(alloc: &mut Allocator, status: u8, note: u8, velocity: u8) {
             // Note-On
             let freq = MIDI_NOTE_HZ[note as usize];
             let idx = alloc.note_on(note);
-            dispatch(idx, VoiceCmd::NoteOn { note, freq_hz: freq });
+            dispatch(
+                idx,
+                VoiceCmd::NoteOn {
+                    note,
+                    freq_hz: freq,
+                },
+            );
         }
         0x80 | 0x90 => {
             // Note-Off (or velocity-0 Note-On)

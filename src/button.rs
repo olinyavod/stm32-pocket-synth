@@ -6,21 +6,18 @@
 //! settle by the next poll.
 
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
-#[cfg(feature = "mcu-stm32f411ce")]
-use embassy_stm32::peripherals::{PA0, PC13};
-#[cfg(feature = "mcu-stm32h7")]
-use embassy_stm32::peripherals::{PB0, PC13};
 use embassy_time::{Duration, Timer};
 
 use crate::generated::MIDI_NOTE_HZ;
-use crate::voice::{dispatch, VoiceCmd};
+use crate::pinmap::{ButtonLedPin, ButtonPin};
+use crate::voice::{VoiceCmd, dispatch};
 
 /// MIDI 69 = A4 = 440 Hz (concert pitch).
 const TEST_NOTE: u8 = 69;
 
 #[cfg(feature = "mcu-stm32f411ce")]
 #[embassy_executor::task]
-pub async fn button_task(pin: PA0, led_pin: PC13) -> ! {
+pub async fn button_task(pin: ButtonPin, led_pin: ButtonLedPin) -> ! {
     // PA0 has the WeAct KEY button to GND — pull-up keeps it HIGH idle.
     let button = Input::new(pin, Pull::Up);
 
@@ -55,7 +52,7 @@ pub async fn button_task(pin: PA0, led_pin: PC13) -> ! {
 
 #[cfg(feature = "mcu-stm32h7")]
 #[embassy_executor::task]
-pub async fn button_task(pin: PC13, led_pin: PB0) -> ! {
+pub async fn button_task(pin: ButtonPin, led_pin: ButtonLedPin) -> ! {
     // NUCLEO-H743ZI2 B1 USER is on PC13 and is active HIGH.
     let button = Input::new(pin, Pull::Down);
 

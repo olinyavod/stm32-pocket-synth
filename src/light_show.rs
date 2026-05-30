@@ -5,15 +5,15 @@
 //! On a rest the LED is dark.
 
 use embassy_stm32::gpio::OutputType;
-use embassy_stm32::peripherals::{PA8, TIM1};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::low_level::CountingMode;
 use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
 use embassy_time::{Duration, Timer};
 
-use black_sitizator::util::peak_brightness;
 use crate::generated::LED_PWM_FREQ_HZ;
+use crate::pinmap::{LedPin, LedTimer};
 use crate::voice::MELODY_NOTE;
+use black_sitizator::util::peak_brightness;
 
 /// Pitch range used to map note frequency → peak brightness.
 /// Notes below LOW_HZ get min brightness; above HIGH_HZ get max.
@@ -25,7 +25,7 @@ const HIGH_HZ: u32 = 900;
 const FADE_STEPS: u64 = 24;
 
 #[embassy_executor::task]
-pub async fn led_task(tim: TIM1, pin: PA8) -> ! {
+pub async fn led_task(tim: LedTimer, pin: LedPin) -> ! {
     let p = PwmPin::new_ch1(pin, OutputType::PushPull);
     let mut pwm = SimplePwm::new(
         tim,

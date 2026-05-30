@@ -25,6 +25,7 @@ use {defmt_rtt as _, panic_probe as _};
 // (see Cargo.toml [lib]); only `voice`, `light_show`, `usb` and `button` are bin-only modules.
 mod button;
 mod light_show;
+mod pinmap;
 mod usb;
 mod voice;
 
@@ -94,29 +95,9 @@ fn clock_config() -> Config {
     config
 }
 
-#[cfg(feature = "mcu-stm32f411ce")]
-const BOOT_LOG: &str =
-    "Pocket synth STM32F411CE: SYSCLK 96 MHz, USB clk 48 MHz | LED PA8 | Melody PA6 | Bass PB7";
-
-#[cfg(feature = "mcu-stm32h7")]
-const BOOT_LOG: &str =
-    "Pocket synth STM32H743ZI: HSI SYSCLK, USB clock PLL3_Q 48 MHz from STLINK MCO | LED PA8 | Melody PA6 | Bass PB7";
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(clock_config());
-    info!("{}", BOOT_LOG);
-
-    spawner.spawn(light_show::led_task(p.TIM1, p.PA8)).unwrap();
-    spawner.spawn(voice::voice0_task(p.TIM3, p.PA6)).unwrap();
-    spawner.spawn(voice::voice1_task(p.TIM4, p.PB7)).unwrap();
-
-    #[cfg(feature = "mcu-stm32f411ce")]
-    spawner.spawn(button::button_task(p.PA0, p.PC13)).unwrap();
-    #[cfg(feature = "mcu-stm32h7")]
-    spawner.spawn(button::button_task(p.PC13, p.PB0)).unwrap();
-
-    spawner
-        .spawn(usb::usb_task(p.USB_OTG_FS, p.PA12, p.PA11))
-        .unwrap();
+    info!("{}", pinmap::BOOT_LOG);
+    pinmap::spawn_board_tasks(&spawner, p);
 }

@@ -6,7 +6,8 @@ Carmel-sized synthesizer experiments on a WeAct **STM32F411CEU6 BlackPill**, wri
 
 A **breathing LED** demo that exercises the full PWM + DMA + Flash-LUT pipeline that any DDS-style synthesizer is built on:
 
-- TIM1 generates 1 kHz PWM on **PA8** (TIM1_CH1)
+- TIM1 generates 1 kHz PWM on **PA8** (TIM1_CH1) on STM32F411,
+  or **D6 / PE9** (TIM1_CH1) on NUCLEO-H743ZI2
 - DMA2 Stream 5 feeds a gamma-corrected sine LUT into `TIM1->CCR1` on every timer Update event
 - The 2048-entry LUT is computed in `build.rs` and lives entirely in Flash (`.rodata`) — zero RAM cost, zero boot-time math
 - CPU sleeps on `WFI` between DMA-driven CCR updates
@@ -101,15 +102,30 @@ The script builds release, calls `cargo objcopy` to get a raw `.bin`, then invok
 
 ### NUCLEO-H743ZI2
 
+The board wiring is centralized in `src/pinmap.rs`. The H7 profile keeps the
+external project wiring on Arduino/Zio headers and leaves the usual SPI
+display-shield pins free.
+
 | Nucleo signal | MCU pin | Used for |
 |---|---|---|
 | B1 USER | PC13 | Test-note button, active HIGH |
 | LD1 green | PB0 | Button-read indicator, active HIGH |
-| PA8 (TIM1_CH1) | PA8 | External light-show LED |
-| PA6 (TIM3_CH1) | PA6 | Voice 0 PWM output |
-| PB7 (TIM4_CH2) | PB7 | Voice 1 PWM output |
+| D6 (TIM1_CH1) | PE9 | External light-show LED |
+| A0 (TIM2_CH4) | PA3 | Voice 0 PWM output |
+| D0 (TIM4_CH2) | PB7 | Voice 1 PWM output |
 | USB OTG FS | PA12 / PA11 | USB-MIDI D+ / D- |
 | STLINK-V3E USB | SWD | Flashing and RTT logs |
+
+Reserved for a typical SPI display shield:
+
+| Arduino signal | MCU pin | Suggested display use |
+|---|---|---|
+| D13 | PA5 | SPI SCK |
+| D12 | PA6 | SPI MISO |
+| D11 | PB5 | SPI MOSI |
+| D10 | PD14 | Display CS |
+| D9 | PD15 | Display DC |
+| D8 | PF3 | Display reset |
 
 ## Why Rust + Embassy?
 

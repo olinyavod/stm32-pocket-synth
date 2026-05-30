@@ -1,19 +1,23 @@
 //! Two-voice polyphonic chiptune driven by MIDI events from `usb_task`.
 //!
-//! Each voice owns a hardware timer (TIM3 → PA6, TIM4 → PB6) running as a
-//! square-wave oscillator. The MIDI parser picks which voice should sound each
-//! Note-On using a tiny round-robin allocator, then drops the Note-Off back
-//! to whichever voice was holding that note. Both voices output to the same
-//! piezo through the resistor summer, so we get a real 2-channel chiptune mix.
+//! Each voice owns a hardware timer running as a square-wave oscillator. On
+//! STM32F411 this is TIM3 -> PA6 and TIM4 -> PB7. On NUCLEO-H743ZI2 the
+//! Arduino-header map uses TIM2 -> PA3/A0 and TIM4 -> PB7/D0 so the standard
+//! SPI display-shield pins stay free. The MIDI parser picks which voice should
+//! sound each Note-On using a tiny round-robin allocator, then drops the
+//! Note-Off back to whichever voice was holding that note. Both voices output
+//! to the same piezo through the resistor summer, so we get a real 2-channel
+//! chiptune mix.
 
 use embassy_stm32::gpio::OutputType;
-use embassy_stm32::peripherals::{PA6, PB7, TIM3, TIM4};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::low_level::CountingMode;
 use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
+
+use crate::pinmap::{Voice0Pin, Voice0Timer, Voice1Pin, Voice1Timer};
 
 /// Light-show feed — signalled on every Note-On (any voice).
 pub static MELODY_NOTE: Signal<CriticalSectionRawMutex, (u32, u64)> = Signal::new();
@@ -44,8 +48,9 @@ pub static VOICE_1: Channel<CriticalSectionRawMutex, VoiceCmd, 16> = Channel::ne
 // concrete TIM/pin pair — embassy's task macro doesn't accept generics, so we
 // duplicate the small inner loop rather than fight the borrow checker.
 
+#[cfg(feature = "mcu-stm32f411ce")]
 #[embassy_executor::task]
-pub async fn voice0_task(tim: TIM3, pin: PA6) -> ! {
+pub async fn voice0_task(tim: Voice0Timer, pin: Voice0Pin) -> ! {
     let p = PwmPin::new_ch1(pin, OutputType::PushPull);
     let mut pwm = SimplePwm::new(
         tim,
@@ -88,10 +93,52 @@ pub async fn voice0_task(tim: TIM3, pin: PA6) -> ! {
     }
 }
 
+#[cfg(feature = "mcu-stm32h7")]
 #[embassy_executor::task]
-pub async fn voice1_task(tim: TIM4, pin: PB7) -> ! {
-    // PB7 = TIM4_CH2. Switched from PB6/CH1 because PB6 appeared dead in
-    // bench-testing (possibly burnt or never properly soldered).
+pub async fn voice0_task(tim: Voice0Timer, pin: Voice0Pin) -> ! {
+    // PA3 = Arduino A0 = TIM2_CH4 on NUCLEO-H743ZI2.
+    let p = PwmPin::new_ch4(pin, OutputType::PushPull);
+    let mut pwm = SimplePwm::new(
+        tim,
+        None,
+        None,
+        None,
+        Some(p),
+        Hertz(1_000),
+        CountingMode::EdgeAlignedUp,
+    );
+    pwm.ch4().enable();
+    pwm.ch4().set_duty_cycle(0);
+
+    let mut current: Option<u8> = None;
+    loop {
+        match VOICE_0.receive().await {
+            VoiceCmd::NoteOn { note, freq_hz } => {
+                pwm.set_frequency(Hertz(freq_hz));
+                let duty = (pwm.max_duty_cycle() as u32 * NOTE_DUTY_PCT / 100) as u16;
+                pwm.ch4().set_duty_cycle(duty);
+                current = Some(note);
+                MELODY_NOTE.signal((freq_hz, LED_FADE_HINT_MS));
+            }
+            VoiceCmd::NoteOff { note } => {
+                if current == Some(note) {
+                    pwm.ch4().set_duty_cycle(0);
+                    current = None;
+                }
+            }
+            VoiceCmd::AllOff => {
+                pwm.ch4().set_duty_cycle(0);
+                current = None;
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+pub async fn voice1_task(tim: Voice1Timer, pin: Voice1Pin) -> ! {
+    // PB7 = TIM4_CH2. On H7 this is Arduino D0. Switched from PB6/CH1 because
+    // PB6 appeared dead in bench-testing (possibly burnt or never properly
+    // soldered).
     let p = PwmPin::new_ch2(pin, OutputType::PushPull);
     let mut pwm = SimplePwm::new(
         tim,
