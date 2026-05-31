@@ -1,6 +1,5 @@
-//! USB-MIDI device. The BlackPill appears on the PC as a class-compliant
-//! USB MIDI device. Incoming Note-On / Note-Off messages are routed through
-//! a small voice allocator to whichever of the two physical voices is free.
+//! USB-MIDI device. Incoming Note-On / Note-Off messages are routed through
+//! a small voice allocator to the board-specific voice backend.
 
 use defmt::*;
 use embassy_stm32::bind_interrupts;
@@ -11,7 +10,7 @@ use embassy_usb::{Builder, Config as UsbConfig};
 
 use crate::generated::MIDI_NOTE_HZ;
 use crate::pinmap::{UsbDmPin, UsbDpPin, UsbPeripheral};
-use crate::voice::{Allocator, VoiceCmd, dispatch};
+use crate::voice::{Allocator, VoiceCmd, dispatch, dispatch_all_off};
 
 bind_interrupts!(pub struct Irqs {
     OTG_FS => InterruptHandler<UsbPeripheral>;
@@ -75,9 +74,8 @@ pub async fn usb_task(periph: UsbPeripheral, dp: UsbDpPin, dm: UsbDmPin) -> ! {
             info!("USB-MIDI connected");
             let _ = pump_midi(&mut class).await;
             info!("USB-MIDI disconnected");
-            // Silence both voices in case a note was held when the host went away.
-            dispatch(0, VoiceCmd::AllOff);
-            dispatch(1, VoiceCmd::AllOff);
+            // Silence any logical voices in case a note was held when the host went away.
+            dispatch_all_off();
         }
     };
     embassy_futures::join::join(usb_fut, midi_fut).await;
@@ -131,8 +129,7 @@ fn handle_event(alloc: &mut Allocator, status: u8, note: u8, velocity: u8) {
         0xB0 if note == 123 => {
             // CC #123 = All Notes Off (panic button)
             alloc.all_off();
-            dispatch(0, VoiceCmd::AllOff);
-            dispatch(1, VoiceCmd::AllOff);
+            dispatch_all_off();
         }
         _ => {}
     }

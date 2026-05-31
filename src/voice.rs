@@ -1,35 +1,26 @@
-//! Two-voice polyphonic chiptune driven by MIDI events from `usb_task`.
+//! Board-independent MIDI voice routing.
 //!
-//! Each voice owns a hardware timer running as a square-wave oscillator. On
-//! STM32F411 this is TIM3 -> PA6 and TIM4 -> PB7. On NUCLEO-H743ZI2 the
-//! Arduino-header map uses TIM2 -> PA3/A0 and TIM4 -> PB7/D0 so the standard
-//! SPI display-shield pins stay free. The MIDI parser picks which voice should
-//! sound each Note-On using a tiny round-robin allocator, then drops the
-//! Note-Off back to whichever voice was holding that note. Both voices output
-//! to the same piezo through the resistor summer, so we get a real 2-channel
-//! chiptune mix.
+//! STM32F411 keeps the original two physical PWM voices. STM32H743 uses one
+//! physical PWM audio pin with a small software DDS mixer behind it.
 
-use embassy_stm32::gpio::OutputType;
-use embassy_stm32::time::Hertz;
-use embassy_stm32::timer::low_level::CountingMode;
-use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 
-use crate::pinmap::{Voice0Pin, Voice0Timer, Voice1Pin, Voice1Timer};
-
-/// Light-show feed — signalled on every Note-On (any voice).
+/// Light-show feed - signalled on every Note-On.
 pub static MELODY_NOTE: Signal<CriticalSectionRawMutex, (u32, u64)> = Signal::new();
 
-/// LED fade hint used by `light_show::led_task` — MIDI notes have no a priori
+/// LED fade hint used by `light_show::led_task` - MIDI notes have no a priori
 /// duration so we just pick a perceptually pleasant value.
 pub const LED_FADE_HINT_MS: u64 = 200;
 
-/// PWM duty cycle for an active note. 50 % is the standard symmetric square
-/// wave — maximum fundamental power, classic chiptune sound. Two voices summed
-/// through the resistor mixer can briefly hit the supply rail; if that turns
-/// out to crackle in the amplifier, lower this value (e.g. 30 %).
+#[cfg(feature = "mcu-stm32f411ce")]
+pub const VOICE_COUNT: usize = 2;
+
+#[cfg(feature = "mcu-stm32h7")]
+pub const VOICE_COUNT: usize = 8;
+
+/// PWM duty cycle for an active F4 square-wave voice.
+#[cfg(feature = "mcu-stm32f411ce")]
 pub const NOTE_DUTY_PCT: u32 = 50;
 
 #[derive(Clone, Copy)]
@@ -39,162 +30,23 @@ pub enum VoiceCmd {
     AllOff,
 }
 
-// One bounded queue per voice. 16 slots covers the burstiest realistic key-press
-// rate (VMPK / fast trills); excess events are dropped via `try_send`.
-pub static VOICE_0: Channel<CriticalSectionRawMutex, VoiceCmd, 16> = Channel::new();
-pub static VOICE_1: Channel<CriticalSectionRawMutex, VoiceCmd, 16> = Channel::new();
-
-// Voice tasks are near-duplicates because each is generic over a different
-// concrete TIM/pin pair — embassy's task macro doesn't accept generics, so we
-// duplicate the small inner loop rather than fight the borrow checker.
-
-#[cfg(feature = "mcu-stm32f411ce")]
-#[embassy_executor::task]
-pub async fn voice0_task(tim: Voice0Timer, pin: Voice0Pin) -> ! {
-    let p = PwmPin::new_ch1(pin, OutputType::PushPull);
-    let mut pwm = SimplePwm::new(
-        tim,
-        Some(p),
-        None,
-        None,
-        None,
-        Hertz(1_000),
-        CountingMode::EdgeAlignedUp,
-    );
-    pwm.ch1().enable();
-    pwm.ch1().set_duty_cycle(0);
-
-    let mut current: Option<u8> = None;
-    loop {
-        match VOICE_0.receive().await {
-            VoiceCmd::NoteOn { note, freq_hz } => {
-                pwm.set_frequency(Hertz(freq_hz));
-                // 30 % duty (not 50 %) so when both voices happen to be HIGH at
-                // the same instant the summed voltage on node A stays in the
-                // amplifier's linear range. Avoids clipping during 2-key
-                // polyphony at the cost of mono-volume; the user compensates
-                // with the volume pot.
-                let duty = (pwm.max_duty_cycle() as u32 * NOTE_DUTY_PCT / 100) as u16;
-                pwm.ch1().set_duty_cycle(duty);
-                current = Some(note);
-                MELODY_NOTE.signal((freq_hz, LED_FADE_HINT_MS));
-            }
-            VoiceCmd::NoteOff { note } => {
-                if current == Some(note) {
-                    pwm.ch1().set_duty_cycle(0);
-                    current = None;
-                }
-            }
-            VoiceCmd::AllOff => {
-                pwm.ch1().set_duty_cycle(0);
-                current = None;
-            }
-        }
-    }
-}
-
-#[cfg(feature = "mcu-stm32h7")]
-#[embassy_executor::task]
-pub async fn voice0_task(tim: Voice0Timer, pin: Voice0Pin) -> ! {
-    // PA3 = Arduino A0 = TIM2_CH4 on NUCLEO-H743ZI2.
-    let p = PwmPin::new_ch4(pin, OutputType::PushPull);
-    let mut pwm = SimplePwm::new(
-        tim,
-        None,
-        None,
-        None,
-        Some(p),
-        Hertz(1_000),
-        CountingMode::EdgeAlignedUp,
-    );
-    pwm.ch4().enable();
-    pwm.ch4().set_duty_cycle(0);
-
-    let mut current: Option<u8> = None;
-    loop {
-        match VOICE_0.receive().await {
-            VoiceCmd::NoteOn { note, freq_hz } => {
-                pwm.set_frequency(Hertz(freq_hz));
-                let duty = (pwm.max_duty_cycle() as u32 * NOTE_DUTY_PCT / 100) as u16;
-                pwm.ch4().set_duty_cycle(duty);
-                current = Some(note);
-                MELODY_NOTE.signal((freq_hz, LED_FADE_HINT_MS));
-            }
-            VoiceCmd::NoteOff { note } => {
-                if current == Some(note) {
-                    pwm.ch4().set_duty_cycle(0);
-                    current = None;
-                }
-            }
-            VoiceCmd::AllOff => {
-                pwm.ch4().set_duty_cycle(0);
-                current = None;
-            }
-        }
-    }
-}
-
-#[embassy_executor::task]
-pub async fn voice1_task(tim: Voice1Timer, pin: Voice1Pin) -> ! {
-    // PB7 = TIM4_CH2. On H7 this is Arduino D0. Switched from PB6/CH1 because
-    // PB6 appeared dead in bench-testing (possibly burnt or never properly
-    // soldered).
-    let p = PwmPin::new_ch2(pin, OutputType::PushPull);
-    let mut pwm = SimplePwm::new(
-        tim,
-        None,
-        Some(p),
-        None,
-        None,
-        Hertz(1_000),
-        CountingMode::EdgeAlignedUp,
-    );
-    pwm.ch2().enable();
-    pwm.ch2().set_duty_cycle(0);
-
-    let mut current: Option<u8> = None;
-    loop {
-        match VOICE_1.receive().await {
-            VoiceCmd::NoteOn { note, freq_hz } => {
-                pwm.set_frequency(Hertz(freq_hz));
-                let duty = (pwm.max_duty_cycle() as u32 * NOTE_DUTY_PCT / 100) as u16;
-                pwm.ch2().set_duty_cycle(duty);
-                current = Some(note);
-                MELODY_NOTE.signal((freq_hz, LED_FADE_HINT_MS));
-            }
-            VoiceCmd::NoteOff { note } => {
-                if current == Some(note) {
-                    pwm.ch2().set_duty_cycle(0);
-                    current = None;
-                }
-            }
-            VoiceCmd::AllOff => {
-                pwm.ch2().set_duty_cycle(0);
-                current = None;
-            }
-        }
-    }
-}
-
-// --- Voice allocator (consumed by usb_task) ---
-
-/// Tracks which MIDI note (if any) each voice is currently sounding, and
-/// chooses targets for new Note-Ons via round-robin steal.
+/// Tracks which MIDI note (if any) each logical voice is currently sounding,
+/// and chooses targets for new Note-Ons via round-robin steal.
 pub struct Allocator {
-    notes: [Option<u8>; 2],
+    notes: [Option<u8>; VOICE_COUNT],
     next_steal: usize,
 }
 
 impl Allocator {
     pub const fn new() -> Self {
         Self {
-            notes: [None; 2],
+            notes: [None; VOICE_COUNT],
             next_steal: 0,
         }
     }
 
     /// Pick a voice to sound `note`. Prefer an idle slot; otherwise steal one
-    /// in round-robin order. Returns the voice index (0 or 1).
+    /// in round-robin order. Returns the logical voice index.
     pub fn note_on(&mut self, note: u8) -> usize {
         for i in 0..self.notes.len() {
             if self.notes[i].is_none() {
@@ -220,19 +72,24 @@ impl Allocator {
     }
 
     pub fn all_off(&mut self) {
-        self.notes = [None; 2];
+        self.notes = [None; VOICE_COUNT];
     }
 }
 
-/// Send a `VoiceCmd` to voice `idx`. Drops the command if the queue is full.
-pub fn dispatch(idx: usize, cmd: VoiceCmd) {
-    match idx {
-        0 => {
-            let _ = VOICE_0.try_send(cmd);
-        }
-        1 => {
-            let _ = VOICE_1.try_send(cmd);
-        }
-        _ => {}
+#[cfg(feature = "mcu-stm32f411ce")]
+mod f4;
+
+#[cfg(feature = "mcu-stm32h7")]
+mod h7;
+
+#[cfg(feature = "mcu-stm32f411ce")]
+pub use f4::{dispatch, voice0_task, voice1_task};
+
+#[cfg(feature = "mcu-stm32h7")]
+pub use h7::{audio_task, dispatch};
+
+pub fn dispatch_all_off() {
+    for idx in 0..VOICE_COUNT {
+        dispatch(idx, VoiceCmd::AllOff);
     }
 }

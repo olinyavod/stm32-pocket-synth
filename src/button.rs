@@ -1,6 +1,6 @@
 //! On-board `KEY` button (PA0 on WeAct BlackPill) as a test trigger.
 //!
-//! While the button is held, voice 0 sustains a test note (A4 = MIDI 69).
+//! While the button is held, logical voice 0 sustains a test note (A4 = MIDI 69).
 //! Releasing the button stops it. The 15 ms polling interval doubles as a
 //! cheap debounce — switch bounce is typically < 5 ms, so any noisy edges
 //! settle by the next poll.

@@ -15,13 +15,18 @@ A **breathing LED** demo that exercises the full PWM + DMA + Flash-LUT pipeline 
 
 Same primitives, swapped LUT/rate, scale up to audio: feed an I2S DAC at 48 kHz with a phase-accumulator into the sine LUT, sum a few accumulators for polyphony, multiply samples by an ADSR envelope, modulate the phase increment for FM.
 
+The H7 profile currently mixes up to 8 logical DDS voices into one audio-rate
+PWM output on **A0 / PA3**. The older two-pin analog voice mixer is only for
+the F411 profile.
+
 ## Roadmap
 
 - [x] Breathing LED via TIM1 PWM + DMA (verifies toolchain + DMA-pipeline pattern)
-- [ ] PWM audio output through an RC filter (audible sine, swept frequency)
+- [x] H7 8-voice software DDS mixer on one PWM audio pin
+- [ ] RC-filtered line output polish for the PWM audio path
 - [ ] I2S audio out to an external DAC (PCM5102, MAX98357, etc.)
 - [ ] Phase-accumulator DDS, variable note frequency
-- [ ] Polyphony (multiple accumulators mixed)
+- [x] Polyphony (multiple accumulators mixed on H7)
 - [ ] ADSR envelopes
 - [ ] MIDI input (UART)
 - [ ] Physical piano keys (button matrix → MIDI events)
@@ -111,10 +116,13 @@ display-shield pins free.
 | B1 USER | PC13 | Test-note button, active HIGH |
 | LD1 green | PB0 | Button-read indicator, active HIGH |
 | D6 (TIM1_CH1) | PE9 | External light-show LED |
-| A0 (TIM2_CH4) | PA3 | Voice 0 PWM output |
-| D0 (TIM4_CH2) | PB7 | Voice 1 PWM output |
+| A0 (TIM2_CH4) | PA3 | Mono audio PWM output |
 | USB OTG FS | PA12 / PA11 | USB-MIDI D+ / D- |
 | STLINK-V3E USB | SWD | Flashing and RTT logs |
+
+The current H7 firmware uses one physical audio pin. See
+[`docs/audio-wiring.md`](docs/audio-wiring.md) for the transistor + potentiometer
+buzzer-driver wiring notes.
 
 Reserved for a typical SPI display shield:
 

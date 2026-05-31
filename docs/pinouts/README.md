@@ -24,8 +24,7 @@ Arduino/Zio headers:
 | Project signal | Arduino header | MCU pin | Timer |
 |---|---|---|---|
 | Light-show LED | D6 | PE9 | TIM1_CH1 |
-| Voice 0 PWM | A0 | PA3 | TIM2_CH4 |
-| Voice 1 PWM | D0 | PB7 | TIM4_CH2 |
+| Mono audio PWM | A0 | PA3 | TIM2_CH4 |
 
 Reserved for a typical SPI display shield:
 
